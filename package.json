@@ -1,0 +1,8 @@
+{
+  "name": "rag-root",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "backend": "uvicorn backend.app.main:app --reload --port 8000"
+  }
+}
