@@ -6,10 +6,12 @@ import { FileUpload } from "./components/FileUpload";
 import { ChatWindow } from "./components/ChatWindow";
 import { SourceInspectorDrawer } from "./components/SourceInspectorDrawer";
 import type { CitationMetadata } from "./components/SourceInspectorDrawer";
+import { DocumentList } from "./components/DocumentList";
 
 const MainDashboard: React.FC = () => {
   const [modelChoice, setModelChoice] = useState<"nomic" | "nemotron">("nomic");
   const [selectedCitation, setSelectedCitation] = useState<CitationMetadata | null>(null);
+  const [docRefreshTrigger, setDocRefreshTrigger] = useState(0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden", backgroundColor: "#090d16" }}>
@@ -35,8 +37,10 @@ const MainDashboard: React.FC = () => {
 
           <FileUpload 
             modelChoice={modelChoice} 
-            onUploadSuccess={() => {}} 
+            onUploadSuccess={() => setDocRefreshTrigger((prev) => prev + 1)} 
           />
+
+          <DocumentList refreshTrigger={docRefreshTrigger} />
         </div>
 
         {/* Right Streaming Chat Window - Locked height */}
