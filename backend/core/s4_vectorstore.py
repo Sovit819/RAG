@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 import chromadb
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CHROMA_DIR = DATA_DIR / "chromadb"
 CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -17,10 +17,6 @@ def get_chroma_client():
     return _client
 
 def get_user_collection(user_id: str):
-    """
-    Returns a dedicated, isolated ChromaDB collection per user.
-    Configured with Cosine similarity space (hnsw:space = cosine).
-    """
     client = get_chroma_client()
     sanitized_user_id = str(user_id).replace("-", "_")
     collection_name = f"user_{sanitized_user_id}"
@@ -38,7 +34,6 @@ def store_chunks(
     parser_engine: str = "Docling TableFormer (OCR)",
     **kwargs
 ):
-    """Stores chunks in user collection with page_number and section breadcrumb metadata."""
     collection = get_user_collection(user_id)
     
     ids = [
@@ -75,10 +70,6 @@ def get_section_sibling_chunks(
     root_breadcrumb: str,
     max_chunks: int = 40
 ) -> List[Dict[str, Any]]:
-    """
-    Hierarchical Sibling Expansion:
-    Pulls all contiguous sibling chunks belonging to the same section tree across all pages.
-    """
     if not root_breadcrumb or not root_breadcrumb.strip():
         return []
         
@@ -87,7 +78,6 @@ def get_section_sibling_chunks(
         return []
 
     try:
-        # Extract root section header (e.g., '2. Programs' from '2. Programs > College of Engineering')
         clean_root = root_breadcrumb.split(">")[0].strip()
         all_doc_chunks = collection.get(
             where={"doc_name": doc_name},
@@ -108,7 +98,6 @@ def get_section_sibling_chunks(
                         "distance": 0.05
                     })
                     
-            # Sort by sequence chunk index to preserve reading flow
             siblings.sort(key=lambda x: x["metadata"].get("chunk_index", 0))
             return siblings[:max_chunks]
     except Exception:
@@ -120,12 +109,9 @@ def query_user_chunks(
     user_id: str, 
     query_embedding: List[float], 
     top_k: int = 6,
-    expand_siblings: bool = True,
+    expand_siblings: bool = False,
     **kwargs
 ) -> List[Dict[str, Any]]:
-    """
-    Queries matching chunks and performs dynamic section sibling expansion when broad chapters are detected.
-    """
     collection = get_user_collection(user_id)
     
     if collection.count() == 0:
@@ -161,7 +147,6 @@ def query_user_chunks(
                 
     retrieved.sort(key=lambda x: x["similarity"], reverse=True)
 
-    # If top chunk has a major section header, expand siblings to cover the full multi-page section
     if expand_siblings and retrieved:
         top_match = retrieved[0]
         top_breadcrumb = top_match["metadata"].get("breadcrumb", "")

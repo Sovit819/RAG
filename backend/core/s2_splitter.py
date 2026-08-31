@@ -76,12 +76,6 @@ def split_document(
     chunk_size: int = 1000,
     chunk_overlap: int = 150
 ) -> List[Dict[str, Any]]:
-    """
-    100% Generic Table-Row-Aware Splitter with Page Provenance:
-    - Splits document while tagging exact page_number on every chunk.
-    - Preserves atomic table rows and duplicates column headers across chunks.
-    """
-    # If page items provided from page-by-page extraction (e.g. Qwen Vision)
     if page_items:
         all_chunks: List[Dict[str, Any]] = []
         for p in page_items:
@@ -94,7 +88,6 @@ def split_document(
         if all_chunks:
             return all_chunks
 
-    # If Docling document
     if doc is not None:
         try:
             markdown_text = doc.export_to_markdown()
@@ -154,7 +147,6 @@ def split_markdown_document(
         if not content:
             continue
 
-        # Extract page hints if present in markdown comments like <!-- page: 18 --> or <!-- image -->
         page_hint = default_page
         page_match = re.search(r'<!--\s*(?:page|Page)\s*:\s*(\d+)\s*-->', content)
         if page_match:
