@@ -1,7 +1,6 @@
 import React, { useState } from "react";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { Navbar } from "./components/Navbar";
-import { ModelSelector } from "./components/ModelSelector";
 import { FileUpload } from "./components/FileUpload";
 import { ChatWindow } from "./components/ChatWindow";
 import { SourceInspectorDrawer } from "./components/SourceInspectorDrawer";
@@ -9,7 +8,6 @@ import type { CitationMetadata } from "./components/SourceInspectorDrawer";
 import { DocumentList } from "./components/DocumentList";
 
 const MainDashboard: React.FC = () => {
-  const [modelChoice, setModelChoice] = useState<"nomic" | "nemotron">("nomic");
   const [selectedCitation, setSelectedCitation] = useState<CitationMetadata | null>(null);
   const [docRefreshTrigger, setDocRefreshTrigger] = useState(0);
 
@@ -28,15 +26,7 @@ const MainDashboard: React.FC = () => {
       }}>
         {/* Left Control Sidebar - Fixed height, independently scrollable if needed */}
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem", overflowY: "auto", height: "100%" }}>
-          <div>
-            <label style={{ color: "#94a3b8", fontSize: "0.8rem", fontWeight: "600", marginBottom: "0.4rem", display: "block" }}>
-              EMBEDDING MODEL SELECTOR
-            </label>
-            <ModelSelector modelChoice={modelChoice} setModelChoice={setModelChoice} />
-          </div>
-
           <FileUpload 
-            modelChoice={modelChoice} 
             onUploadSuccess={() => setDocRefreshTrigger((prev) => prev + 1)} 
           />
 
@@ -46,7 +36,7 @@ const MainDashboard: React.FC = () => {
         {/* Right Streaming Chat Window - Locked height */}
         <div style={{ height: "100%", overflow: "hidden" }}>
           <ChatWindow 
-            modelChoice={modelChoice} 
+            onSelectCitation={setSelectedCitation}
           />
         </div>
       </main>

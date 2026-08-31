@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Mic, MicOff, Volume2, Send, Bot, User as UserIcon, Loader2, Sparkles } from "lucide-react";
+import { Mic, MicOff, Volume2, Send, Bot, User as UserIcon, Loader2, Sparkles, FileText, ChevronRight } from "lucide-react";
 import { useSpeechToText } from "../hooks/useSpeechToText";
 import { useTextToSpeech } from "../hooks/useTextToSpeech";
+import type { CitationMetadata } from "./SourceInspectorDrawer";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
 
@@ -10,13 +11,15 @@ interface Message {
   id: string;
   sender: "user" | "assistant";
   text: string;
+  sources?: Array<CitationMetadata & { similarity?: number; breadcrumb?: string }>;
 }
 
 interface ChatWindowProps {
-  modelChoice: string;
+  modelChoice?: string;
+  onSelectCitation?: (citation: CitationMetadata) => void;
 }
 
-export const ChatWindow: React.FC<ChatWindowProps> = ({ modelChoice }) => {
+export const ChatWindow: React.FC<ChatWindowProps> = ({ onSelectCitation }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -51,14 +54,18 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ modelChoice }) => {
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          prompt: textToSend,
-          model_choice: modelChoice
+          prompt: textToSend
         })
       });
 
       if (!response.body) throw new Error("No response body");
 
-      const assistantMsg: Message = { id: (Date.now() + 1).toString(), sender: "assistant", text: "" };
+      const assistantMsg: Message = { 
+        id: (Date.now() + 1).toString(), 
+        sender: "assistant", 
+        text: "",
+        sources: []
+      };
       setMessages((prev) => [...prev, assistantMsg]);
 
       const reader = response.body.getReader();
@@ -75,7 +82,22 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ modelChoice }) => {
           if (line.startsWith("data: ")) {
             try {
               const parsed = JSON.parse(line.replace("data: ", ""));
-              if (parsed.token) {
+              
+              // Handle incoming retrieved sources metadata
+              if (parsed.type === "sources" && Array.isArray(parsed.sources)) {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const lastIdx = updated.length - 1;
+                  if (updated[lastIdx].sender === "assistant") {
+                    updated[lastIdx] = {
+                      ...updated[lastIdx],
+                      sources: parsed.sources
+                    };
+                  }
+                  return updated;
+                });
+              } else if (parsed.token) {
+                // Handle token streaming
                 setMessages((prev) => {
                   const updated = [...prev];
                   const lastIdx = updated.length - 1;
@@ -204,6 +226,50 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({ modelChoice }) => {
                 <div style={{ textAlign: "left" }}>
                   <ReactMarkdown>{msg.text || (streaming && msg.sender === "assistant" ? "Thinking..." : "")}</ReactMarkdown>
                 </div>
+
+                {/* Grounding Source Citations Badge List */}
+                {msg.sender === "assistant" && msg.sources && msg.sources.length > 0 && (
+                  <div style={{ marginTop: "0.8rem", paddingTop: "0.6rem", borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+                    <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginBottom: "0.4rem", fontWeight: "600" }}>
+                      Grounded Sources ({msg.sources.length}):
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+                      {msg.sources.map((src, idx) => (
+                        <button
+                          key={idx}
+                          onClick={() => onSelectCitation && onSelectCitation(src)}
+                          style={{
+                            background: "rgba(15, 23, 42, 0.8)",
+                            border: "1px solid #334155",
+                            color: "#38bdf8",
+                            padding: "0.25rem 0.6rem",
+                            borderRadius: "6px",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.3rem",
+                            fontSize: "0.75rem",
+                            transition: "all 0.2s"
+                          }}
+                          title={src.breadcrumb ? `Section: ${src.breadcrumb}` : src.doc_name}
+                        >
+                          <FileText size={12} />
+                          <span style={{ maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {src.doc_name}
+                          </span>
+                          {src.breadcrumb && (
+                            <>
+                              <ChevronRight size={10} style={{ color: "#64748b" }} />
+                              <span style={{ maxWidth: "120px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#cbd5e1" }}>
+                                {src.breadcrumb}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {msg.sender === "assistant" && msg.text && (
                   <div style={{ marginTop: "0.8rem", paddingTop: "0.5rem", borderTop: "1px solid rgba(255,255,255,0.1)", display: "flex", gap: "0.5rem" }}>

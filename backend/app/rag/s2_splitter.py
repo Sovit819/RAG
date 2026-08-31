@@ -1,53 +1,130 @@
 import html
 import re
+from typing import Optional, List, Dict, Any
 from langchain_text_splitters import MarkdownHeaderTextSplitter, RecursiveCharacterTextSplitter
 
-def _extract_table_header(text: str) -> str:
-    """Extracts valid multi-line Markdown table headers leading up to the separator line (|---|---|)."""
-    lines = [line.strip() for line in text.splitlines() if line.strip().startswith('|')]
-    if len(lines) < 2:
+def clean_and_format_markdown_tables(md_text: str) -> str:
+    if not md_text:
         return ""
-    
+    lines = md_text.splitlines()
+    cleaned = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.strip().startswith("|") and set(line.strip().replace("|", "").replace("-", "").strip()).issubset(set()) and "---" in line:
+            if i > 0 and lines[i-1].strip().startswith("|"):
+                cols = len(lines[i-1].strip().split("|")) - 2
+                if cols > 0:
+                    cleaned.append("|" + "---|" * cols)
+                    i += 1
+                    continue
+        cleaned.append(line)
+        i += 1
+    return "\n".join(cleaned)
+
+def split_markdown_table_atomically(
+    table_text: str,
+    max_chars_per_chunk: int = 1200
+) -> List[str]:
+    lines = [l.rstrip() for l in table_text.strip().splitlines() if l.strip()]
+    if len(lines) < 2:
+        return [table_text]
+
+    header_idx = -1
     sep_idx = -1
-    for i, line in enumerate(lines):
-        if "---" in line:
-            sep_idx = i
+    for idx, l in enumerate(lines):
+        if "---" in l and l.strip().startswith("|"):
+            sep_idx = idx
+            header_idx = idx - 1
             break
-            
-    if sep_idx > 0:
-        header_lines = lines[:sep_idx + 1]
-        combined_text = "".join(header_lines).replace("|", "").replace("-", "").strip()
-        if len(combined_text) > 0:
-            return "\n".join(header_lines)
-            
-    return ""
+
+    if header_idx < 0 or sep_idx < 0:
+        return [table_text]
+
+    header_lines = lines[:sep_idx + 1]
+    header_block = "\n".join(header_lines)
+    data_rows = lines[sep_idx + 1:]
+
+    if not data_rows:
+        return [table_text]
+
+    table_chunks = []
+    current_rows = []
+    current_len = len(header_block)
+
+    for row in data_rows:
+        row_len = len(row) + 1
+        if current_rows and (current_len + row_len > max_chars_per_chunk):
+            chunk_content = header_block + "\n" + "\n".join(current_rows)
+            table_chunks.append(chunk_content)
+            current_rows = [row]
+            current_len = len(header_block) + row_len
+        else:
+            current_rows.append(row)
+            current_len += row_len
+
+    if current_rows:
+        chunk_content = header_block + "\n" + "\n".join(current_rows)
+        table_chunks.append(chunk_content)
+
+    return table_chunks
+
+def split_document(
+    doc: Optional[Any] = None,
+    markdown_text: str = "",
+    page_items: Optional[List[Dict[str, Any]]] = None,
+    chunk_size: int = 1000,
+    chunk_overlap: int = 150
+) -> List[Dict[str, Any]]:
+    """
+    100% Generic Table-Row-Aware Splitter with Page Provenance:
+    - Splits document while tagging exact page_number on every chunk.
+    - Preserves atomic table rows and duplicates column headers across chunks.
+    """
+    # If page items provided from page-by-page extraction (e.g. Qwen Vision)
+    if page_items:
+        all_chunks: List[Dict[str, Any]] = []
+        for p in page_items:
+            p_num = p.get("page_number", 1)
+            p_text = p.get("text", "")
+            sub_chunks = split_markdown_document(p_text, chunk_size=chunk_size, chunk_overlap=chunk_overlap, default_page=p_num)
+            for c in sub_chunks:
+                c["page_number"] = p_num
+            all_chunks.extend(sub_chunks)
+        if all_chunks:
+            return all_chunks
+
+    # If Docling document
+    if doc is not None:
+        try:
+            markdown_text = doc.export_to_markdown()
+        except Exception:
+            pass
+
+    return split_markdown_document(
+        markdown_text=markdown_text,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        default_page=1
+    )
 
 def split_markdown_document(
     markdown_text: str,
     chunk_size: int = 1000,
-    chunk_overlap: int = 150
-) -> list[dict]:
-    """
-    Splits Markdown text using a two-pass context-preserving approach:
-    1. Pass 1 (Header Awareness): Extracts section hierarchy (#, ##, ###) and attaches header metadata.
-    2. Pass 2 (Size Control & Table Preservation):
-       - Unescapes HTML entities (&amp; -> &).
-       - Cleans broken table separator lines (--| -> '').
-       - Preserves table column headers for split table chunks.
-       - Attaches structural breadcrumbs as chunk metadata instead of polluting text body.
-    Returns: list[dict] where each item is {"text": str, "breadcrumb": str}
-    """
+    chunk_overlap: int = 150,
+    default_page: int = 1
+) -> List[Dict[str, Any]]:
     if not markdown_text or not markdown_text.strip():
         return []
 
-    # Unescape HTML entities (&amp; -> &, &lt; -> <) and clean malformed table delimiter lines
-    cleaned_text = html.unescape(markdown_text)
-    cleaned_text = re.sub(r'^\s*--+\|\s*$', '', cleaned_text, flags=re.MULTILINE)
+    cleaned_text = html.unescape(markdown_text).strip()
+    cleaned_text = clean_and_format_markdown_tables(cleaned_text)
 
     headers_to_split_on = [
         ("#", "Header 1"),
         ("##", "Header 2"),
         ("###", "Header 3"),
+        ("####", "Header 4"),
     ]
 
     header_splitter = MarkdownHeaderTextSplitter(
@@ -55,20 +132,17 @@ def split_markdown_document(
         strip_headers=False
     )
 
-    # Pass 1: Structural header splitting
     header_docs = header_splitter.split_text(cleaned_text)
 
-    # Pass 2: Secondary character splitter for sections exceeding chunk_size
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", " ", ""]
+        separators=["\n\n", "\n", " "]
     )
 
-    final_chunks: list[dict] = []
+    final_chunks: List[Dict[str, Any]] = []
 
     for doc in header_docs:
-        # Build breadcrumb trail from header metadata
         header_path_parts = []
         for _, header_name in headers_to_split_on:
             if header_name in doc.metadata:
@@ -80,30 +154,92 @@ def split_markdown_document(
         if not content:
             continue
 
-        # Extract table header if section contains a markdown table
-        table_header = _extract_table_header(content)
+        # Extract page hints if present in markdown comments like <!-- page: 18 --> or <!-- image -->
+        page_hint = default_page
+        page_match = re.search(r'<!--\s*(?:page|Page)\s*:\s*(\d+)\s*-->', content)
+        if page_match:
+            try:
+                page_hint = int(page_match.group(1))
+            except Exception:
+                pass
 
-        # If section content fits within target chunk_size, keep as single chunk
-        if len(content) <= chunk_size:
-            final_chunks.append({
-                "text": content,
-                "breadcrumb": breadcrumb
-            })
+        if "\n|" in content and "---" in content:
+            table_lines = []
+            non_table_lines = []
+            in_table = False
+
+            for line in content.splitlines():
+                if line.strip().startswith("|"):
+                    in_table = True
+                    table_lines.append(line)
+                else:
+                    if in_table:
+                        if table_lines:
+                            for tbl_chunk in split_markdown_table_atomically("\n".join(table_lines), max_chars_per_chunk=chunk_size):
+                                ctx_text = f"[{breadcrumb}]\n{tbl_chunk}" if breadcrumb else tbl_chunk
+                                final_chunks.append({
+                                    "text": tbl_chunk,
+                                    "context_text": ctx_text,
+                                    "breadcrumb": breadcrumb,
+                                    "page_number": page_hint
+                                })
+                            table_lines = []
+                        in_table = False
+                    non_table_lines.append(line)
+
+            if table_lines:
+                for tbl_chunk in split_markdown_table_atomically("\n".join(table_lines), max_chars_per_chunk=chunk_size):
+                    ctx_text = f"[{breadcrumb}]\n{tbl_chunk}" if breadcrumb else tbl_chunk
+                    final_chunks.append({
+                        "text": tbl_chunk,
+                        "context_text": ctx_text,
+                        "breadcrumb": breadcrumb,
+                        "page_number": page_hint
+                    })
+
+            meaningful_non_table = [l for l in non_table_lines if l.strip() and not l.strip().startswith("#")]
+            non_tbl_content = "\n".join(meaningful_non_table).strip()
+            if non_tbl_content:
+                if len(non_tbl_content) <= chunk_size:
+                    ctx_text = f"[{breadcrumb}]\n{non_tbl_content}" if breadcrumb else non_tbl_content
+                    final_chunks.append({
+                        "text": non_tbl_content,
+                        "context_text": ctx_text,
+                        "breadcrumb": breadcrumb,
+                        "page_number": page_hint
+                    })
+                else:
+                    for sub in text_splitter.split_text(non_tbl_content):
+                        sub_text = sub.strip()
+                        if sub_text:
+                            ctx_text = f"[{breadcrumb}]\n{sub_text}" if breadcrumb else sub_text
+                            final_chunks.append({
+                                "text": sub_text,
+                                "context_text": ctx_text,
+                                "breadcrumb": breadcrumb,
+                                "page_number": page_hint
+                            })
         else:
-            # Sub-split oversized section
-            sub_chunks = text_splitter.split_text(content)
-            for sub in sub_chunks:
-                sub_text = sub.strip()
-                if not sub_text:
-                    continue
-
-                # If sub-chunk contains table rows but lacks table header separator, prepend table header
-                if table_header and sub_text.startswith("|") and ("---" not in sub_text):
-                    sub_text = f"{table_header}\n{sub_text}"
-
+            if len(content) <= chunk_size:
+                ctx_text = f"[{breadcrumb}]\n{content}" if breadcrumb else content
                 final_chunks.append({
-                    "text": sub_text,
-                    "breadcrumb": breadcrumb
+                    "text": content,
+                    "context_text": ctx_text,
+                    "breadcrumb": breadcrumb,
+                    "page_number": page_hint
                 })
+            else:
+                sub_chunks = text_splitter.split_text(content)
+                for sub in sub_chunks:
+                    sub_text = sub.strip()
+                    if not sub_text:
+                        continue
+                    ctx_text = f"[{breadcrumb}]\n{sub_text}" if breadcrumb else sub_text
+                    final_chunks.append({
+                        "text": sub_text,
+                        "context_text": ctx_text,
+                        "breadcrumb": breadcrumb,
+                        "page_number": page_hint
+                    })
 
     return final_chunks
